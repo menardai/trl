@@ -172,7 +172,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # --- Compute rewards ---
     texts = [q + r for q, r in zip(batch['query'], batch['response'])]
     rewards = reward_fn(texts)
-    reward_tensors = [torch.tensor(reward) for reward in rewards]
+    reward_tensors = [torch.FloatTensor(reward) for reward in rewards]
     # pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     # rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
 
