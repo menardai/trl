@@ -21,7 +21,7 @@ tqdm.pandas()
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from trl import PPOTrainer2GPU, PPOConfig, AutoModelForCausalLMWithValueHead
+from trl import PPOTrainer, PPOTrainer2GPU, PPOConfig, AutoModelForCausalLMWithValueHead
 from trl.core import LengthSampler
 
 from summarization_dataset import build_dataset
@@ -68,7 +68,8 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
 ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer2GPU(
+# ppo_trainer = PPOTrainer2GPU(
+ppo_trainer = PPOTrainer(
     config,
     model,
     ref_model,
