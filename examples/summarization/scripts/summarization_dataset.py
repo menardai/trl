@@ -105,8 +105,8 @@ def build_dataset(tokenizer):
     #     }
     prompt_summary_dict = {}
 
-    train_posts = train_posts[:100]    # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
-    val_posts = val_posts[:10]         # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
+    #train_posts = train_posts[:1000]    # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
+    #val_posts = val_posts[:100]         # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
 
     logging.warning("Formatting train prompts...")
     train_prompts = get_prompt_dataset(tokenizer, train_posts, max_length_input)
