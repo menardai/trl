@@ -91,6 +91,7 @@ rw_tokenizer = AutoTokenizer.from_pretrained(rw_model_name)
 rw_model = AutoModelForSequenceClassification.from_pretrained(rw_model_name, num_labels=1)
 rw_model.eval()
 # rw_model.half()
+rw_model.to(rw_device)
 
 # Need to do this for gpt2, because it doesn't have an official pad token.
 rw_tokenizer.pad_token = rw_tokenizer.eos_token
@@ -113,13 +114,12 @@ def get_scores(samples):
         )
         input_ids = encodings_dict["input_ids"].to(rw_device)
         attn_masks = encodings_dict["attention_mask"].to(rw_device)
-        # input_ids = input_ids.repeat(2, 1)    <-- pas besoin avec le trl rw model, c'etait pour trlx rw model?
-        # attn_masks = attn_masks.repeat(2, 1)
 
         with torch.no_grad():
             sub_scores = rw_model(input_ids=input_ids, attention_mask=attn_masks)[0]
+            sub_scores = sub_scores.view(batch_size, )
 
-        scores_list.append(sub_scores[0])
+        scores_list.append(sub_scores)
 
     scores = torch.cat(scores_list, dim=0)
     return scores
