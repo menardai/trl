@@ -41,13 +41,16 @@ from summarization_dataset import build_dataset
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 
+ppo_batch_size = 16  # must be larger and multiple of rw_batch_size
+rw_batch_size = 8
+
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 config = PPOConfig(
     model_name="gpt2",
     learning_rate=1.41e-5,
-    batch_size=1,
+    batch_size=ppo_batch_size,
 )
 
 
@@ -83,13 +86,13 @@ ppo_trainer = PPOTrainer2GPU(
 
 logging.warning("Loading Reward Model...")
 rw_model_name = "Tristan/gpt2_reward_summarization"
-rw_device = "cpu"
+rw_device = "cuda:1"
 
 # Load the pre-trained reward model
 rw_tokenizer = AutoTokenizer.from_pretrained(rw_model_name)
 rw_model = AutoModelForSequenceClassification.from_pretrained(rw_model_name, num_labels=1)
 rw_model.eval()
-# rw_model.half()
+rw_model.half()
 rw_model.to(rw_device)
 
 # Need to do this for gpt2, because it doesn't have an official pad token.
@@ -100,9 +103,8 @@ rw_model.config.pad_token_id = rw_tokenizer.eos_token_id
 def get_scores(samples):
     """Compute scores for the given list of string."""
     scores_list = []
-    batch_size = 2
-    for i in range(0, len(samples), batch_size):
-        sub_samples = samples[i: i + batch_size]
+    for i in range(0, len(samples), rw_batch_size):
+        sub_samples = samples[i: i + rw_batch_size]
 
         encodings_dict = rw_tokenizer(
             sub_samples,
@@ -116,7 +118,7 @@ def get_scores(samples):
 
         with torch.no_grad():
             sub_scores = rw_model(input_ids=input_ids, attention_mask=attn_masks)[0]
-            sub_scores = sub_scores.view(batch_size, )
+            sub_scores = sub_scores.view(rw_batch_size, )
 
         scores_list.append(sub_scores)
 
@@ -172,7 +174,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # --- Compute rewards ---
     texts = [q + r for q, r in zip(batch['query'], batch['response'])]
     rewards = reward_fn(texts)
-    reward_tensors = [torch.FloatTensor(reward) for reward in rewards]
+    reward_tensors = [torch.FloatTensor(reward.to("cpu").type(torch.FloatTensor)) for reward in rewards]
 
     # --- Run a PPO step ---
     stats = ppo_trainer.step(query_tensors, response_tensors, reward_tensors)
