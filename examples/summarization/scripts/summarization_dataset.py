@@ -1,15 +1,16 @@
 import logging
+import torch
 
 from tqdm import tqdm
 
 from datasets import Dataset, load_dataset
-from transformers import AutoTokenizer
 
 
 def get_prompt_dataset(tokenizer, prompts, max_length):
     """
     Get the prompt after decoding to make sure dictionary of prompts and summaries is consistent decode prompt
     """
+    skip_count = 0
     formatted_prompts = []
     for i in tqdm(range(len(prompts))):
         tmp = tokenizer.decode(
@@ -22,17 +23,24 @@ def get_prompt_dataset(tokenizer, prompts, max_length):
         ).strip()
 
         tmp = tmp + "\nTL;DR:"
-        tmp = tokenizer.decode(
-            tokenizer(tmp, truncation=True, max_length=max_length)["input_ids"],
+        tmp_encoded = tokenizer(tmp, truncation=True, max_length=max_length)["input_ids"]
+        tmp_decoded = tokenizer.decode(
+            tmp_encoded,
             skip_special_tokens=True,
         ).strip()
 
-        formatted_prompts.append(tmp)
+        if tmp == tmp_decoded:
+            formatted_prompts.append(tmp_decoded)
+        else:
+            skip_count += 1
+
+    if skip_count:
+        logging.warning(f"--- Skipped {skip_count} entries (problem with token encoding/decoding) ---")
 
     return formatted_prompts
 
 
-def build_dataset(tokenizer):
+def build_dataset(tokenizer, ppo_batch_size):
     tokenizer.padding_side = "left"
 
     max_length_input = (
@@ -108,6 +116,12 @@ def build_dataset(tokenizer):
     #train_posts = train_posts[:1000]    # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
     #val_posts = val_posts[:100]         # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
 
+    # crop number of examples to a multiple of batch size
+    example_count = int(len(train_posts) / ppo_batch_size) * ppo_batch_size
+    train_posts = train_posts[:example_count]
+    example_count = int(len(val_posts) / ppo_batch_size) * ppo_batch_size
+    val_posts = val_posts[:example_count]
+
     logging.warning("Formatting train prompts...")
     train_prompts = get_prompt_dataset(tokenizer, train_posts, max_length_input)
     for i in range(len(train_prompts)):
@@ -130,5 +144,12 @@ def build_dataset(tokenizer):
     )
     train_dataset = train_dataset.map(tokenize, batched=False)
     train_dataset.set_format(type='torch')
+
+    # validate that all prompts can be found in prompt_summary_dict using the 'query' field
+    logging.warning("Validating prompts tokenizations...")
+    dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=1)
+    for batch in dataloader:
+        if prompt_summary_dict.get(batch['query'][0]) is None:
+            logging.error(f"--- error --- (token count = {len(batch['input_ids'][0])}) \n{batch['query'][0]}")
 
     return train_dataset, train_prompts, val_prompts, prompt_summary_dict

@@ -2,6 +2,7 @@
 # Based on trl/examples/sentiment/scripts/gpt2-sentiment.py and CarperAI/trlx summarization ppo training
 import logging
 import torch
+import os
 
 from tqdm import tqdm
 
@@ -9,7 +10,7 @@ tqdm.pandas()
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from trl import PPOTrainer2GPU, PPOConfig, AutoModelForCausalLMWithValueHead
+from trl import PPOTrainer2GPU, PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
 from trl.core import LengthSampler
 
 from summarization_dataset import build_dataset
@@ -29,8 +30,10 @@ from summarization_dataset import build_dataset
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 
-rw_batch_size = 8
-ppo_batch_size = rw_batch_size * 1  # must be larger or equal, and a multiple of rw_batch_size
+rw_batch_size = 16
+ppo_batch_size = 64
+
+rw_device = "cuda:1"
 
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
@@ -51,7 +54,7 @@ tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 # (only for this model)
 tokenizer.pad_token = tokenizer.eos_token
 
-train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(tokenizer)
+train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(tokenizer, ppo_batch_size)
 
 # Now let's build the model, the reference model, and the tokenizer.
 logging.warning("Loading Model and Reference Model...")
@@ -74,13 +77,13 @@ ppo_trainer = PPOTrainer2GPU(
 
 logging.warning("Loading Reward Model...")
 rw_model_name = "Tristan/gpt2_reward_summarization"
-rw_device = "cuda:1"
 
 # Load the pre-trained reward model
 rw_tokenizer = AutoTokenizer.from_pretrained(rw_model_name)
 rw_model = AutoModelForSequenceClassification.from_pretrained(rw_model_name, num_labels=1)
 rw_model.eval()
-rw_model.half()
+if rw_device.startswith("cuda"):
+    rw_model.half()
 rw_model.to(rw_device)
 
 # Need to do this for gpt2, because it doesn't have an official pad token.
@@ -106,7 +109,7 @@ def get_scores(samples):
 
         with torch.no_grad():
             sub_scores = rw_model(input_ids=input_ids, attention_mask=attn_masks)[0]
-            sub_scores = sub_scores.view(rw_batch_size, )
+            sub_scores = sub_scores.view(input_ids.shape[0], )
 
         scores_list.append(sub_scores)
 
@@ -168,3 +171,6 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     stats = ppo_trainer.step(query_tensors, response_tensors, reward_tensors)
 
     ppo_trainer.log_stats(stats, batch, rewards)
+
+os.makedirs("./ppo_trained_model")
+model.save_pretrained("./ppo_trained_model")
