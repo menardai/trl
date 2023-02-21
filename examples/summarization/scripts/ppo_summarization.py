@@ -42,6 +42,7 @@ config = PPOConfig(
     model_name="gpt2",
     learning_rate=1.41e-5,
     batch_size=ppo_batch_size,
+    ppo_epochs=4,
 )
 
 
@@ -59,7 +60,10 @@ train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(t
 # Now let's build the model, the reference model, and the tokenizer.
 logging.warning("Loading Model and Reference Model...")
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
+
 ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
+ref_model.eval()
+ref_model.half()
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
 ppo_trainer = PPOTrainer2GPU(
@@ -172,5 +176,5 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     ppo_trainer.log_stats(stats, batch, rewards)
 
-os.makedirs("./ppo_trained_model")
+os.makedirs("./ppo_trained_model", exist_ok=True)
 model.save_pretrained("./ppo_trained_model")
