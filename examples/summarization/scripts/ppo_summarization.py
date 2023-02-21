@@ -58,7 +58,7 @@ tokenizer.pad_token = tokenizer.eos_token
 train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(tokenizer, ppo_batch_size)
 
 # Now let's build the model, the reference model, and the tokenizer.
-logging.warning("Loading Model and Reference Model...")
+logging.warning(f"Loading Model and Reference Model... {config.model_name}")
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
 
 ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
