@@ -116,12 +116,6 @@ def build_dataset(tokenizer, ppo_batch_size):
     #train_posts = train_posts[:1000]    # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
     #val_posts = val_posts[:100]         # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
 
-    # crop number of examples to a multiple of batch size
-    example_count = int(len(train_posts) / ppo_batch_size) * ppo_batch_size
-    train_posts = train_posts[:example_count]
-    example_count = int(len(val_posts) / ppo_batch_size) * ppo_batch_size
-    val_posts = val_posts[:example_count]
-
     logging.warning("Formatting train prompts...")
     train_prompts = get_prompt_dataset(tokenizer, train_posts, max_length_input)
     for i in range(len(train_prompts)):
@@ -131,6 +125,10 @@ def build_dataset(tokenizer, ppo_batch_size):
     val_prompts = get_prompt_dataset(tokenizer, val_posts, max_length_input)
     for i in range(len(val_prompts)):
         prompt_summary_dict[val_prompts[i]] = val_summaries[i]
+
+    # crop number of examples to a multiple of batch size
+    train_prompts = train_prompts[:int(len(train_prompts) / ppo_batch_size) * ppo_batch_size]
+    val_prompts = val_prompts[:int(len(val_prompts) / ppo_batch_size) * ppo_batch_size]
 
     # tokenized the training dataset
     def tokenize(sample):
