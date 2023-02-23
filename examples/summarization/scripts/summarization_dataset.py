@@ -40,7 +40,7 @@ def get_prompt_dataset(tokenizer, prompts, max_length):
     return formatted_prompts
 
 
-def build_dataset(tokenizer, ppo_batch_size):
+def build_dataset(tokenizer, ppo_batch_size, max_train_examples=None, max_eval_examples=None):
     tokenizer.padding_side = "left"
 
     max_length_input = (
@@ -113,8 +113,10 @@ def build_dataset(tokenizer, ppo_batch_size):
     #     }
     prompt_summary_dict = {}
 
-    #train_posts = train_posts[:1000]    # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
-    #val_posts = val_posts[:100]         # ----> DEBUG DEBUG DEBUG DEBUG DEBUG <-----
+    if max_train_examples:
+        train_posts = train_posts[:max_train_examples]
+    if max_eval_examples:
+        val_posts = val_posts[:max_eval_examples]
 
     logging.warning("Formatting train prompts...")
     train_prompts = get_prompt_dataset(tokenizer, train_posts, max_length_input)
