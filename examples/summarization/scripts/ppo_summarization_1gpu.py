@@ -4,13 +4,15 @@ import logging
 import torch
 import os
 
+# import bitsandbytes as bnb
+
 from tqdm import tqdm
 
 tqdm.pandas()
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from trl import PPOTrainer2GPU, PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
 from trl.core import LengthSampler
 
 from summarization_dataset import build_dataset
@@ -30,20 +32,21 @@ from summarization_dataset import build_dataset
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 
-rw_batch_size = 16
-ppo_batch_size = 64
+rw_batch_size = 2
+ppo_batch_size = 2
 
-rw_device = "cuda:1"
+rw_device = "cuda:0"
 
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
+output_model_name = "ppo_gpt2_medium"
 config = PPOConfig(
-    model_name="gpt2",
+    model_name="gpt2-medium",
     learning_rate=1.41e-5,
     batch_size=ppo_batch_size,
     ppo_epochs=4,
-    # log_with="wandb",
+    log_with="wandb",
 )
 
 
@@ -51,27 +54,44 @@ def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 
+def freeze_layers(model, frozen_layers=0.80):
+    # Freeze the first 80% of the hidden layers of the model backbone
+    logging.info(f"Freezing {frozen_layers} of model layers.")
+
+    layers = model.pretrained_model.transformer.h
+    num_layers = len(layers)
+    num_unfrozen = int((1.0 - frozen_layers) * num_layers)
+    for layer in layers[:-num_unfrozen]:
+        layer.requires_grad_(False)
+
+
 tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # (only for this model)
 tokenizer.pad_token = tokenizer.eos_token
 
-train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(tokenizer, ppo_batch_size)
+train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(tokenizer, ppo_batch_size, max_train_examples=None)
 
 # Now let's build the model, the reference model, and the tokenizer.
 logging.warning(f"Loading Model and Reference Model... {config.model_name}")
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
+logging.warning("--> model layers 80% frozen <--")
+freeze_layers(model)
 
 ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
 ref_model.eval()
 ref_model.half()
 
+# logging.warning("--> optim.Adam8bit <--")  # --- output same token all the time ---
+# optimizer = bnb.optim.Adam8bit(model.parameters(), lr=config.learning_rate)
+
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer2GPU(
+ppo_trainer = PPOTrainer(
     config,
     model,
     ref_model,
     tokenizer,
+    # optimizer=optimizer,
     dataset=train_dataset,
     data_collator=collator,
 )
@@ -177,6 +197,7 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
 
     ppo_trainer.log_stats(stats, batch, rewards)
 
-os.makedirs("./ppo_trained_model", exist_ok=True)
-model.save_pretrained("./ppo_trained_model")
-tokenizer.save_pretrained("./ppo_trained_model")
+trained_model_dir = f"./{output_model_name}"
+os.makedirs(trained_model_dir, exist_ok=True)
+model.save_pretrained(trained_model_dir)
+tokenizer.save_pretrained(trained_model_dir)
