@@ -122,3 +122,4 @@ trainer = Trainer(
 trainer.train()
 
 trainer.save_model(output_dir)
+tokenizer.save_pretrained(output_dir)

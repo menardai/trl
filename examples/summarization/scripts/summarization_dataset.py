@@ -157,11 +157,18 @@ def build_dataset(tokenizer, ppo_batch_size, max_train_examples=None, max_eval_e
     train_dataset = train_dataset.map(tokenize, batched=False)
     train_dataset.set_format(type='torch')
 
+    logging.warning("Tokenizing eval set...")
+    val_dataset = Dataset.from_dict(
+        {"prompt": val_prompts}
+    )
+    val_dataset = val_dataset.map(tokenize, batched=False)
+    val_dataset.set_format(type='torch')
+
     # validate that all prompts can be found in prompt_summary_dict using the 'query' field
-    logging.warning("Validating prompts tokenizations...")
+    logging.warning("Validating training prompts tokenizations...")
     dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=1)
     for batch in dataloader:
         if prompt_summary_dict.get(batch['query'][0]) is None:
             logging.error(f"--- error --- (token count = {len(batch['input_ids'][0])}) \n{batch['query'][0]}")
 
-    return train_dataset, train_prompts, val_prompts, prompt_summary_dict
+    return train_dataset, val_dataset, train_prompts, val_prompts, prompt_summary_dict

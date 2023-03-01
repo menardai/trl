@@ -21,13 +21,24 @@ from summarization_dataset import build_dataset
 #
 ########################################################################
 
-batch_size = 16
+batch_size = 1
 device = "cpu"
 
 model_names = [
-    "gpt2",
-    "gpt2-medium",
-    "gpt2-large",
+    # small
+    # "gpt2-small-sft",
+    # "ppo-gpt2-small",
+    # "ppo-gpt2-small-sft",
+
+    # large
+    # "gpt2-large-sft",
+    # "ppo-gpt2-large",
+    # "ppo-gpt2-large-sft",
+
+    # "gpt2-large-sft-tldr4_epochs_16_bs",  # generate GOOD output - no warning at loading time
+    # "ppo-gpt2-small-sft",  # generate GOOD output - WARNING at load time
+    "ppo_gpt2",  # generate GOOD output - WARNING at load time
+    # "ppo_trained_model_gpt2_large_4_epochs_4_bs",  # generate BAD output - WARNING at load time
 ]
 
 cuda_available = torch.cuda.is_available()
@@ -44,10 +55,10 @@ def tokenize(sample):
     return sample
 
 
-tokenizer = AutoTokenizer.from_pretrained(model_names[0])
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
 tokenizer.pad_token = tokenizer.eos_token
 
-_, _, eval_prompts, _ = build_dataset(
+_, _, _, eval_prompts, _ = build_dataset(
     tokenizer,
     batch_size,
     max_train_examples=1,
@@ -91,7 +102,7 @@ for model_name in model_names:
     model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
     model.eval()
     if cuda_available and device.startswith("cuda"):
-        model.half()
+        # model.half()
         model.to(device)
 
     model_outputs_dict[model_name] = []
@@ -114,6 +125,7 @@ for model_name in model_names:
             response_tensors.append(response.squeeze()[-gen_len:])
 
         batch_response = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+        print(batch_response[0])
         model_outputs_dict[model_name].extend(batch_response)
 
 

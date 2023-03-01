@@ -78,7 +78,7 @@ tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 # (only for this model)
 tokenizer.pad_token = tokenizer.eos_token
 
-train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(
+train_dataset, eval_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(
     tokenizer,
     ppo_batch_size,
     max_train_examples=max_train_examples,
