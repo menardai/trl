@@ -6,14 +6,15 @@ from tqdm import tqdm
 from datasets import Dataset, load_dataset
 
 
-def get_prompt_dataset(tokenizer, prompts, max_length):
+def get_prompt_dataset(tokenizer, prompts, max_length, ending_with_tldr_exclusively=True):
     """
     Get the prompt after decoding to make sure dictionary of prompts and summaries is consistent decode prompt
     """
-    skip_count = 0
+    skip_enc_dec_count = 0
+    skip_too_long_count = 0
     formatted_prompts = []
     for i in tqdm(range(len(prompts))):
-        tmp = tokenizer.decode(
+        tmp_a = tokenizer.decode(
             tokenizer(
                 prompts[i].split("TL;DR:")[0],
                 truncation=True,
@@ -22,25 +23,36 @@ def get_prompt_dataset(tokenizer, prompts, max_length):
             skip_special_tokens=True,
         ).strip()
 
-        tmp = tmp + "\nTL;DR:"
-        tmp_encoded = tokenizer(tmp, truncation=True, max_length=max_length)["input_ids"]
-        tmp_decoded = tokenizer.decode(
-            tmp_encoded,
-            skip_special_tokens=True,
-        ).strip()
+        too_long = False
+        if ending_with_tldr_exclusively:
+            prompt_before_tldr = prompts[i].split("TL;DR:")[0]
+            # not too long if the truncated tokenized version still end with the same text
+            too_long = prompt_before_tldr.rstrip()[-20:] != tmp_a.rstrip()[-20:]
 
-        if tmp == tmp_decoded:
-            formatted_prompts.append(tmp_decoded)
+        if not too_long:
+            tmp = tmp_a + "\nTL;DR:"
+            tmp_encoded = tokenizer(tmp, truncation=True, max_length=max_length)["input_ids"]
+            tmp_decoded = tokenizer.decode(
+                tmp_encoded,
+                skip_special_tokens=True,
+            ).strip()
+
+            if tmp == tmp_decoded:
+                formatted_prompts.append(tmp_decoded)
+            else:
+                skip_enc_dec_count += 1
         else:
-            skip_count += 1
+            skip_too_long_count += 1
 
-    if skip_count:
-        logging.warning(f"--- Skipped {skip_count} entries (problem with token encoding/decoding) ---")
+    if skip_enc_dec_count:
+        logging.warning(f"--- Skipped {skip_enc_dec_count} entries (problem with token encoding/decoding) ---")
+    if skip_too_long_count:
+        logging.warning(f"--- Skipped {skip_too_long_count} entries (too long) ---")
 
     return formatted_prompts
 
 
-def build_dataset(tokenizer, ppo_batch_size, max_train_examples=None, max_eval_examples=None):
+def build_dataset(tokenizer, ppo_batch_size, max_train_examples=None, max_eval_examples=None, ending_with_tldr_exclusively=True):
     tokenizer.padding_side = "left"
 
     max_length_input = (
@@ -119,12 +131,12 @@ def build_dataset(tokenizer, ppo_batch_size, max_train_examples=None, max_eval_e
         val_posts = val_posts[:max_eval_examples]
 
     logging.warning("Formatting train prompts...")
-    train_prompts = get_prompt_dataset(tokenizer, train_posts, max_length_input)
+    train_prompts = get_prompt_dataset(tokenizer, train_posts, max_length_input, ending_with_tldr_exclusively)
     for i in range(len(train_prompts)):
         prompt_summary_dict[train_prompts[i]] = train_summaries[i]
 
     logging.warning("Formatting eval prompts...")
-    val_prompts = get_prompt_dataset(tokenizer, val_posts, max_length_input)
+    val_prompts = get_prompt_dataset(tokenizer, val_posts, max_length_input, ending_with_tldr_exclusively)
     for i in range(len(val_prompts)):
         prompt_summary_dict[val_prompts[i]] = val_summaries[i]
 
