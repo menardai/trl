@@ -262,6 +262,7 @@ class PPOTrainer(BaseTrainer):
 
         # init the current step
         self.current_step = 0
+        self.log_stats_count = 0
 
         # init wandb on the main process:
         if self.accelerator.is_main_process and self.config.log_with == "wandb":
@@ -309,6 +310,7 @@ class PPOTrainer(BaseTrainer):
             batch_size=self.config.batch_size,
             collate_fn=data_collator,
             shuffle=True,
+            drop_last=True,
         )
         return dataloader
 
@@ -818,6 +820,7 @@ class PPOTrainer(BaseTrainer):
         stats: dict,
         batch: dict,
         rewards: List[torch.FloatTensor],
+        game_log_frequency: int = 1,
     ):
         """
         A function that logs all the training stats. Call it at the end of each epoch.
@@ -829,9 +832,12 @@ class PPOTrainer(BaseTrainer):
                 A dictionary of batch data, this contains the queries and responses.
             rewards (`List[torch.FloatTensor]`):
                 A tensor of rewards.
+            game_log_frequency (int):
+                log game every x call
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
+            self.log_stats_count += 1
             logs = {}
 
             # Log stats
@@ -845,10 +851,12 @@ class PPOTrainer(BaseTrainer):
                     "'response'. "
                 )
             elif self.config.log_with == "wandb":
-                import wandb
+                if self.log_stats_count % game_log_frequency == 0:
+                    import wandb
 
-                table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]
-                logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
+                    table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]
+                    logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
+
             # All reduce rewards if distributed
             if self.is_distributed:
                 import torch.distributed as dist

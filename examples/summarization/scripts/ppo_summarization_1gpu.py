@@ -32,21 +32,29 @@ from summarization_dataset import build_dataset
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 
-rw_batch_size = 2
-ppo_batch_size = 2
+rw_batch_size = 1
+ppo_batch_size = 1
 
-rw_device = "cuda:0"
+frozen_layers = 0.50
+
+max_train_examples=100
+max_eval_examples=4
+log_with = None         # "wandb" or None
+
+cuda_available = torch.cuda.is_available()
+rw_device = "cuda" if cuda_available else "cpu"
+
 
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
-output_model_name = "ppo_gpt2_medium"
+output_model_name = "ppo_gpt2_small"
 config = PPOConfig(
-    model_name="gpt2-medium",
+    model_name="gpt2",
     learning_rate=1.41e-5,
     batch_size=ppo_batch_size,
     ppo_epochs=4,
-    log_with="wandb",
+    log_with=log_with,
 )
 
 
@@ -70,17 +78,25 @@ tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 # (only for this model)
 tokenizer.pad_token = tokenizer.eos_token
 
-train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(tokenizer, ppo_batch_size, max_train_examples=None)
+train_dataset, train_prompts, val_prompts, prompt_summary_dict = build_dataset(
+    tokenizer,
+    ppo_batch_size,
+    max_train_examples=max_train_examples,
+    max_eval_examples=max_eval_examples,
+)
 
 # Now let's build the model, the reference model, and the tokenizer.
 logging.warning(f"Loading Model and Reference Model... {config.model_name}")
 model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
-logging.warning("--> model layers 80% frozen <--")
-freeze_layers(model)
+
+logging.warning(f"--> model layers {frozen_layers} frozen <--")
+if frozen_layers > 0:
+    freeze_layers(model, frozen_layers=frozen_layers)
 
 ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
 ref_model.eval()
-ref_model.half()
+if cuda_available:
+    ref_model.half()
 
 # logging.warning("--> optim.Adam8bit <--")  # --- output same token all the time ---
 # optimizer = bnb.optim.Adam8bit(model.parameters(), lr=config.learning_rate)
@@ -173,6 +189,8 @@ output_min_length = 8
 output_max_length = 50
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
+stats_logger_crashed = False
+
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch['input_ids']
 
@@ -195,7 +213,12 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # --- Run a PPO step ---
     stats = ppo_trainer.step(query_tensors, response_tensors, reward_tensors)
 
-    ppo_trainer.log_stats(stats, batch, rewards)
+    try:
+        ppo_trainer.log_stats(stats, batch, rewards, game_log_frequency=10)
+    except ValueError as e:
+        if not stats_logger_crashed:
+            logging.error("Error logging stats")
+        stats_logger_crashed = True
 
 trained_model_dir = f"./{output_model_name}"
 os.makedirs(trained_model_dir, exist_ok=True)
