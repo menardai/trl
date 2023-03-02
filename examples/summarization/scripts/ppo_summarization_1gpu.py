@@ -44,6 +44,7 @@ max_eval_examples = 4
 eval_step_frequency = 10
 
 log_with = "wandb"  # "wandb" or None
+save_step_interval = 1000
 
 cuda_available = torch.cuda.is_available()
 rw_device = "cuda" if cuda_available else "cpu"
@@ -75,6 +76,12 @@ def freeze_layers(model, frozen_layers=0.80):
     num_unfrozen = int((1.0 - frozen_layers) * num_layers)
     for layer in layers[:-num_unfrozen]:
         layer.requires_grad_(False)
+
+
+def save_ppo(trained_model_dir):
+    os.makedirs(trained_model_dir, exist_ok=True)
+    model.save_pretrained(trained_model_dir)
+    tokenizer.save_pretrained(trained_model_dir)
 
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -225,6 +232,9 @@ for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # --- Run a PPO step ---
     stats = ppo_trainer.step(query_tensors, response_tensors, reward_tensors)
 
+    if step % save_step_interval == 0:
+        save_ppo(f"./{output_model_name}_checkpoints/{output_model_name}_{step}")
+
     # --- Evaluation set ---
     eval_query_response = None
     if step % eval_step_frequency == 0:
@@ -257,7 +267,4 @@ for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
             logging.error("Error logging stats")
         stats_logger_crashed = True
 
-trained_model_dir = f"./{output_model_name}"
-os.makedirs(trained_model_dir, exist_ok=True)
-model.save_pretrained(trained_model_dir)
-tokenizer.save_pretrained(trained_model_dir)
+save_ppo(f"./{output_model_name}")
