@@ -77,7 +77,7 @@ def freeze_layers(model, frozen_layers=0.80):
         layer.requires_grad_(False)
 
 
-tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
 # GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # (only for this model)
 tokenizer.pad_token = tokenizer.eos_token
