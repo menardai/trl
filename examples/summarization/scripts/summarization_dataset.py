@@ -142,7 +142,6 @@ def build_dataset(tokenizer, ppo_batch_size, max_train_examples=None, max_eval_e
 
     # crop number of examples to a multiple of batch size
     train_prompts = train_prompts[:int(len(train_prompts) / ppo_batch_size) * ppo_batch_size]
-    val_prompts = val_prompts[:int(len(val_prompts) / ppo_batch_size) * ppo_batch_size]
 
     # tokenized the training dataset
     def tokenize(sample):
