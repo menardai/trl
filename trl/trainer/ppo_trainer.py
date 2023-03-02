@@ -820,7 +820,8 @@ class PPOTrainer(BaseTrainer):
         stats: dict,
         batch: dict,
         rewards: List[torch.FloatTensor],
-        game_log_frequency: int = 1,
+        query_response_log_frequency: int = 1,
+        eval_batch: dict = None,
     ):
         """
         A function that logs all the training stats. Call it at the end of each epoch.
@@ -832,8 +833,10 @@ class PPOTrainer(BaseTrainer):
                 A dictionary of batch data, this contains the queries and responses.
             rewards (`List[torch.FloatTensor]`):
                 A tensor of rewards.
-            game_log_frequency (int):
+            query_response_log_frequency (int):
                 log game every x call
+            eval_batch (dict[str, Any]):
+                A dictionary of batch data, this contains the queries and responses.
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
@@ -851,11 +854,15 @@ class PPOTrainer(BaseTrainer):
                     "'response'. "
                 )
             elif self.config.log_with == "wandb":
-                if self.log_stats_count % game_log_frequency == 0:
+                if self.log_stats_count % query_response_log_frequency == 0:
                     import wandb
 
                     table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]
                     logs.update({"game_log": wandb.Table(columns=["query", "response", "reward"], rows=table_rows)})
+
+                    if eval_batch:
+                        table_rows = [list(r) for r in zip(eval_batch["query"], eval_batch["response"])]
+                        logs.update({"eval_log": wandb.Table(columns=["query", "response"], rows=table_rows)})
 
             # All reduce rewards if distributed
             if self.is_distributed:

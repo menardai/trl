@@ -32,14 +32,18 @@ from summarization_dataset import build_dataset
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 
-rw_batch_size = 1
-ppo_batch_size = 1
+rw_batch_size = 8
+ppo_batch_size = 8
 
-frozen_layers = 0.50
+eval_batch_size = 2
 
-max_train_examples=100
-max_eval_examples=4
-log_with = None         # "wandb" or None
+frozen_layers = 0.80
+
+max_train_examples = None
+max_eval_examples = 4
+eval_step_frequency = 10
+
+log_with = "wandb"  # "wandb" or None
 
 cuda_available = torch.cuda.is_available()
 rw_device = "cuda" if cuda_available else "cpu"
@@ -83,6 +87,13 @@ train_dataset, eval_dataset, train_prompts, val_prompts, prompt_summary_dict = b
     ppo_batch_size,
     max_train_examples=max_train_examples,
     max_eval_examples=max_eval_examples,
+)
+
+eval_dataloader = torch.utils.data.DataLoader(
+    eval_dataset,
+    batch_size=eval_batch_size,
+    collate_fn=collator,
+    shuffle=False,
 )
 
 # Now let's build the model, the reference model, and the tokenizer.
@@ -191,7 +202,7 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
 stats_logger_crashed = False
 
-for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
+for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch['input_ids']
 
     # --- Get response from gpt2 ---
@@ -213,8 +224,32 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # --- Run a PPO step ---
     stats = ppo_trainer.step(query_tensors, response_tensors, reward_tensors)
 
+    # --- Evaluation set ---
+    eval_query_response = {
+        "query": [],
+        "response": [],
+    }
+    if step % eval_step_frequency:
+        for eval_batch in eval_dataloader:
+            eval_query_tensors = eval_batch['input_ids']
+            eval_response_tensors = []
+
+            for query in eval_query_tensors:
+                gen_len = output_length_sampler()
+                generation_kwargs["max_new_tokens"] = gen_len
+
+                eval_response = ppo_trainer.generate(query, **generation_kwargs)
+                eval_response_tensors.append(eval_response.squeeze()[-gen_len:])
+
+            eval_query_response["response"].extend([tokenizer.decode(r.squeeze()) for r in eval_response_tensors])
+            eval_query_response["query"].extend(eval_batch["query"])
+
     try:
-        ppo_trainer.log_stats(stats, batch, rewards, game_log_frequency=10)
+        ppo_trainer.log_stats(
+            stats, batch, rewards,
+            query_response_log_frequency=eval_step_frequency,
+            eval_batch=eval_query_response
+        )
     except ValueError as e:
         if not stats_logger_crashed:
             logging.error("Error logging stats")
