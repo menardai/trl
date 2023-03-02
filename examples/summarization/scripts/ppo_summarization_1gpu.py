@@ -201,6 +201,7 @@ output_max_length = 50
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
 
 stats_logger_crashed = False
+model_device = next(model.parameters()).device
 
 for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch['input_ids']
@@ -232,7 +233,7 @@ for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
             "response": [],
         }
         for eval_batch in eval_dataloader:
-            eval_query_tensors = eval_batch['input_ids']
+            eval_query_tensors = [tensor.to(model_device) for tensor in eval_batch['input_ids']]
             eval_response_tensors = []
 
             for query in eval_query_tensors:
