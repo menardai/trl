@@ -262,7 +262,6 @@ class PPOTrainer(BaseTrainer):
 
         # init the current step
         self.current_step = 0
-        self.log_stats_count = 0
 
         # init wandb on the main process:
         if self.accelerator.is_main_process and self.config.log_with == "wandb":
@@ -820,7 +819,7 @@ class PPOTrainer(BaseTrainer):
         stats: dict,
         batch: dict,
         rewards: List[torch.FloatTensor],
-        query_response_log_frequency: int = 1,
+        log_query_response: bool = False,
         eval_batch: dict = None,
     ):
         """
@@ -833,14 +832,13 @@ class PPOTrainer(BaseTrainer):
                 A dictionary of batch data, this contains the queries and responses.
             rewards (`List[torch.FloatTensor]`):
                 A tensor of rewards.
-            query_response_log_frequency (int):
-                log game every x call
+            log_query_response (bool):
+                if true, log batch and eval queries and responses in wandb tables
             eval_batch (dict[str, Any]):
                 A dictionary of batch data, this contains the queries and responses.
         """
         # Log only if we are in the main process
         if self.accelerator.is_main_process:
-            self.log_stats_count += 1
             logs = {}
 
             # Log stats
@@ -854,7 +852,7 @@ class PPOTrainer(BaseTrainer):
                     "'response'. "
                 )
             elif self.config.log_with == "wandb":
-                if self.log_stats_count % query_response_log_frequency == 0:
+                if log_query_response:
                     import wandb
 
                     table_rows = [list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())]

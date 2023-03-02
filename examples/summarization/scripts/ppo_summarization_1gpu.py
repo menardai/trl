@@ -225,11 +225,12 @@ for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     stats = ppo_trainer.step(query_tensors, response_tensors, reward_tensors)
 
     # --- Evaluation set ---
-    eval_query_response = {
-        "query": [],
-        "response": [],
-    }
-    if step % eval_step_frequency:
+    eval_query_response = None
+    if step % eval_step_frequency == 0:
+        eval_query_response = {
+            "query": [],
+            "response": [],
+        }
         for eval_batch in eval_dataloader:
             eval_query_tensors = eval_batch['input_ids']
             eval_response_tensors = []
@@ -247,7 +248,7 @@ for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     try:
         ppo_trainer.log_stats(
             stats, batch, rewards,
-            query_response_log_frequency=eval_step_frequency,
+            log_query_response=eval_query_response is not None,
             eval_batch=eval_query_response
         )
     except ValueError as e:
