@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2022 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,10 +14,11 @@
 # limitations under the License.
 import torch
 from datasets import load_dataset
+from torch.optim import Adam
 from tqdm import tqdm
-from transformers import AutoTokenizer, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, RobertaForSequenceClassification, RobertaTokenizer
 
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, create_reference_model, set_seed
 from trl.core import LengthSampler
 
 
@@ -26,8 +27,9 @@ tqdm.pandas()
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
 #
-# This example fine-tunes a GPT2 model on the IMDB dataset using PPO
-# (proximal policy optimization).
+# This example fine-tunes a GPTJ model to generate less toxic contents
+# by using allenai/real-toxicity-prompts dataset. We use PPO
+#  (proximal policy optimization) to optimize the model.
 # in any of the following settings (with the same script):
 #   - single CPU or single GPU
 #   - multi GPUS (using PyTorch distributed mode)
@@ -45,20 +47,20 @@ tqdm.pandas()
 # If you want to log with tensorboard, add the kwarg
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
 config = PPOConfig(
-    model_name="lvwerra/gpt2-imdb",
-    learning_rate=1.41e-5,
-    batch_size=2,
+    model_name="ybelkada/gpt-j-6b-sharded-bf16",
+    learning_rate=(1.47e-5) * 2,
+    log_with="wandb",
+    batch_size=32,
+    forward_batch_size=1,
 )
-
-# We then define the arguments to pass to the sentiment analysis pipeline.
-# We set `return_all_scores` to True to get the sentiment score for each token.
-sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
 
 
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
-def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_max_text_length=8):
+def build_dataset(
+    config, dataset_name="allenai/real-toxicity-prompts", input_min_text_length=5, input_max_text_length=10
+):
     """
     Build dataset for training. This builds the dataset from `load_dataset`, one should
     customize this function to train the model on its own dataset.
@@ -73,25 +75,37 @@ def build_dataset(config, dataset_name="imdb", input_min_text_length=2, input_ma
     """
     tokenizer = AutoTokenizer.from_pretrained(config.model_name)
     tokenizer.pad_token = tokenizer.eos_token
-    # load imdb with datasets
+
     ds = load_dataset(dataset_name, split="train")
-    ds = ds.rename_columns({"text": "review"})
-    ds = ds.filter(lambda x: len(x["review"]) > 200, batched=False)
+
+    def filter_fn(sample):
+        toxicity = sample["prompt"]["toxicity"]
+        return toxicity is not None and toxicity > 0.3
+
+    ds = ds.filter(filter_fn, batched=False)
 
     input_size = LengthSampler(input_min_text_length, input_max_text_length)
 
     def tokenize(sample):
-        sample["input_ids"] = tokenizer.encode(sample["review"])[: input_size()]
+        prompt = sample["prompt"]["text"]
+        continuation = sample["continuation"]["text"]
+
+        sample["input_ids"] = tokenizer.encode(prompt + continuation)[: input_size()]
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
     ds = ds.map(tokenize, batched=False)
     ds.set_format(type="torch")
+
+    ds = ds.train_test_split(test_size=0.2, shuffle=False)["train"]
+
     return ds
 
 
 # We retrieve the dataloader by calling the `build_dataset` function.
-dataset = build_dataset(config)
+min_input_length = 30
+max_input_length = 40
+dataset = build_dataset(config, input_min_text_length=min_input_length, input_max_text_length=max_input_length)
 
 
 def collator(data):
@@ -101,25 +115,37 @@ def collator(data):
 # set seed before initializing value head for deterministic eval
 set_seed(config.seed)
 
-# Now let's build the model, the reference model, and the tokenizer.
-model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
-tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+# Now let's build the model, the reference model, and the tokenizer. We first load the model
+# in bfloat16 to save memory using `transformers`.
+model = AutoModelForCausalLM.from_pretrained(config.model_name, torch_dtype=torch.bfloat16)
+# And then we pass the loaded model to `AutoModelForCausalLMWithValueHead`.
+model = AutoModelForCausalLMWithValueHead.from_pretrained(model)
 
-# GPT-2 tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
+# We create a reference model by sharing 20 layers
+ref_model = create_reference_model(model, num_shared_layers=20)
+
+# We make sure to use `Adam` optimizer on the model parameters that require gradients.
+optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=config.learning_rate)
+
+# GPT-2 / GPT-J tokenizer has a pad token, but it is not eos_token by default. We need to set it to eos_token.
 # only for this model.
+tokenizer = AutoTokenizer.from_pretrained(config.model_name)
 tokenizer.pad_token = tokenizer.eos_token
 
 # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator)
+ppo_trainer = PPOTrainer(
+    config, model, ref_model=ref_model, tokenizer=tokenizer, dataset=dataset, data_collator=collator
+)
 
-# We then build the sentiment analysis pipeline, passing the model name and the
-# sentiment analysis pipeline arguments. Let's also make sure to set the device
-# to the same device as the PPOTrainer.
-device = ppo_trainer.accelerator.device
-if ppo_trainer.accelerator.num_processes == 1:
-    device = 0 if torch.cuda.is_available() else "cpu"  # to avoid a `pipeline` bug
-sentiment_pipe = pipeline("sentiment-analysis", model="lvwerra/distilbert-imdb", device=device)
+# We then build the reward pipeline, we will use the toxicity model to compute the reward.
+# We first load the toxicity model and tokenizer.
+toxicity_model_id = "facebook/roberta-hate-speech-dynabench-r4-target"
+toxicity_tokenizer = RobertaTokenizer.from_pretrained(toxicity_model_id)
+# We load the toxicity model in fp16 to save memory.
+toxicity_model = RobertaForSequenceClassification.from_pretrained(toxicity_model_id, torch_dtype=torch.float16).to(
+    ppo_trainer.accelerator.device
+)
+
 
 # We then define the arguments to pass to the `generate` function. These arguments
 # are passed to the `generate` function of the PPOTrainer, which is a wrapper around
@@ -131,9 +157,11 @@ generation_kwargs = {
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
 }
-output_min_length = 4
-output_max_length = 16
+output_min_length = 20
+output_max_length = 30
 output_length_sampler = LengthSampler(output_min_length, output_max_length)
+
+model_save_path = "/mnt/disks/younes-disk/models/gpt-j-6B-detoxified-long-context-26-shl-1e4-final"
 
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
@@ -147,11 +175,21 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         response_tensors.append(response.squeeze()[-gen_len:])
     batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
 
-    # Compute sentiment score
-    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-    pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
-    rewards = [torch.tensor(output[1]["score"]) for output in pipe_outputs]
+    # Compute sentiment score # noqa
+    texts = batch["response"]
+    toxicity_inputs = toxicity_tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(
+        ppo_trainer.accelerator.device
+    )
+    logits = toxicity_model(**toxicity_inputs).logits.float()
+    toxicity_labels = (logits[:, 0]).tolist()
+
+    rewards = [torch.tensor(output) for output in toxicity_labels]
 
     # Run PPO step
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)
+
+    # Save model every 100 epochs
+    if epoch % 100 == 0:
+        if ppo_trainer.accelerator.is_main_process:
+            ppo_trainer.save_pretrained(model_save_path)

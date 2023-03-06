@@ -13,14 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import torch
+from datasets import load_dataset
 from tqdm import tqdm
+from transformers import AutoTokenizer, pipeline
+
+from trl import AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
+from trl.core import LengthSampler
+
 
 tqdm.pandas()
-from transformers import pipeline, AutoTokenizer
-from datasets import load_dataset
-
-from trl import PPOTrainer, PPOConfig, AutoModelForSeq2SeqLMWithValueHead, set_seed
-from trl.core import LengthSampler
 
 ########################################################################
 # This is a fully working simple example to use trl with accelerate.
@@ -42,10 +43,12 @@ from trl.core import LengthSampler
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 # Check the default arguments in the `PPOConfig` class for more details.
-config = PPOConfig(model_name="lvwerra/t5-imdb", learning_rate=5e-5, batch_size=256, forward_batch_size=1)
+config = PPOConfig(model_name="lvwerra/t5-imdb", learning_rate=5e-5, batch_size=256)
 # We then define the arguments to pass to the sentiment analysis pipeline.
 # We set `return_all_scores` to True to get the sentiment score for each token.
-sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": config.forward_batch_size}
+sent_kwargs = {"return_all_scores": True, "function_to_apply": "none", "batch_size": 16}
+
+
 # Below is an example function to build the dataset. In our case, we use the IMDB dataset
 # from the `datasets` library. One should customize this function to train the model on
 # its own dataset.
@@ -108,7 +111,7 @@ output_length_sampler = LengthSampler(output_min_length, output_max_length)
 for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     query_tensors = batch["input_ids"]
 
-    #### Get response from gpt2
+    # Get response from gpt2
     response_tensors = []
     for query in query_tensors:
         gen_len = output_length_sampler()
@@ -117,11 +120,11 @@ for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
         response_tensors.append(response.squeeze())
     batch["response"] = [tokenizer.decode(r[1:].squeeze()) for r in response_tensors]
 
-    #### Compute sentiment score
+    # Compute sentiment score
     texts = [q + r for q, r in zip(batch["query"], batch["response"])]
     pipe_outputs = sentiment_pipe(texts, **sent_kwargs)
     rewards = [torch.tensor(output[1]["score"]).to(device) for output in pipe_outputs]
 
-    #### Run PPO step
+    # Run PPO step
     stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
     ppo_trainer.log_stats(stats, batch, rewards)

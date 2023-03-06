@@ -104,6 +104,34 @@ def whiten(values, shift_mean=True):
     return whitened
 
 
+def masked_mean(values, mask, axis=None):
+    """Compute mean of tensor with a masked values."""
+    if axis is not None:
+        return (values * mask).sum(axis=axis) / mask.sum(axis=axis)
+    else:
+        return (values * mask).sum() / mask.sum()
+
+
+def masked_var(values, mask, unbiased=True):
+    """Compute variance of tensor with masked values."""
+    mean = masked_mean(values, mask)
+    centered_values = values - mean
+    variance = masked_mean(centered_values**2, mask)
+    if unbiased:
+        bessel_correction = mask.sum() / (mask.sum() - 1)
+        variance = variance * bessel_correction
+    return variance
+
+
+def masked_whiten(values, mask, shift_mean=True):
+    """Whiten values with masked values."""
+    mean, var = masked_mean(values, mask), masked_var(values, mask)
+    whitened = (values - mean) * torch.rsqrt(var + 1e-8)
+    if not shift_mean:
+        whitened += mean
+    return whitened
+
+
 def clip_by_value(x, tensor_min, tensor_max):
     """
     Tensor extenstion to torch.clamp
@@ -133,7 +161,10 @@ def stats_to_np(stats_dict):
     new_dict = dict()
     for k, v in stats_dict.items():
         if isinstance(v, torch.Tensor):
-            new_dict[k] = v.detach().cpu().numpy()
+            new_dict[k] = v.detach().cpu()
+            if new_dict[k].dtype == torch.bfloat16:
+                new_dict[k] = new_dict[k].float()
+            new_dict[k] = new_dict[k].numpy()
         else:
             new_dict[k] = v
         if np.isscalar(new_dict[k]):

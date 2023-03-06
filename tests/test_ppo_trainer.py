@@ -20,13 +20,14 @@ import unittest
 
 import torch
 from huggingface_hub import HfApi, HfFolder, delete_repo
+from parameterized import parameterized
 from requests.exceptions import HTTPError
-from transformers import GPT2Tokenizer
+from transformers import AutoTokenizer
 
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
-from trl.core import logprobs_from_logits, respond_to_batch
+from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, PPOConfig, PPOTrainer, set_seed
+from trl.core import respond_to_batch
 
-from ..testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
+from .testing_constants import CI_HUB_ENDPOINT, CI_HUB_USER, CI_HUB_USER_TOKEN
 
 
 EXPECTED_STATS = [
@@ -76,6 +77,22 @@ class DummyDataset(torch.utils.data.Dataset):
         return self.query_data[idx], self.response_data[idx]
 
 
+def apply_mask(values, mask):
+    unmasked_values = []
+    for v, m in zip(values, mask):
+        if m == 1:
+            unmasked_values.append(v)
+    return torch.Tensor(unmasked_values)
+
+
+def abs_diff_masked_tensors(tensor_1, tensor_2, mask_1, mask_2):
+    diffs = []
+    for l1, l2, m1, m2 in zip(tensor_1, tensor_2, mask_1, mask_2):
+        diff = apply_mask(l1, m1) - apply_mask(l2, m2)
+        diffs.append(diff.sum())
+    return abs(sum(diffs))
+
+
 class PPOTrainerTester(unittest.TestCase):
     """
     A wrapper class for testing PPOTrainer
@@ -83,10 +100,33 @@ class PPOTrainerTester(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        set_seed(42)
         cls._token = CI_HUB_USER_TOKEN
         cls._api = HfApi(endpoint=CI_HUB_ENDPOINT)
         cls._api.set_access_token(CI_HUB_USER_TOKEN)
         HfFolder.save_token(CI_HUB_USER_TOKEN)
+
+        # model_id
+        cls.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
+
+        # get models and tokenizer
+        cls.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
+        cls.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(cls.model_id)
+        cls.gpt2_tokenizer = AutoTokenizer.from_pretrained(cls.model_id)
+
+        cls.gpt2_tokenizer.pad_token = cls.gpt2_tokenizer.eos_token
+
+        # get bloom as right padding examples:
+        model_id = "trl-internal-testing/tiny-BloomForCausalLM-correct-vocab"
+        cls.bloom_model = AutoModelForCausalLMWithValueHead.from_pretrained(model_id)
+        cls.bloom_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration-correct-vocab"
+        cls.t5_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(model_id)
+        cls.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # initialize trainer
+        cls.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
 
     @classmethod
     def tearDownClass(cls):
@@ -97,17 +137,9 @@ class PPOTrainerTester(unittest.TestCase):
                 pass
 
     def setUp(self):
-        # model_id
-        self.model_id = "trl-internal-testing/dummy-GPT2-correct-vocab"
-
-        # get models and tokenizer
-        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
-        self.gpt2_model_ref = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
-        self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(self.model_id)
-
         # initialize trainer
-        self.ppo_config = PPOConfig(batch_size=2, forward_batch_size=1, log_with=None)
-
+        self.ppo_config = PPOConfig(batch_size=2, mini_batch_size=1, log_with=None)
+        self.gpt2_model.train()
         return super().setUp()
 
     def tearDown(self):
@@ -131,6 +163,22 @@ class PPOTrainerTester(unittest.TestCase):
         )
 
         return dummy_dataset
+
+    def test_drop_last_dataloader(self):
+        self.ppo_config = PPOConfig(batch_size=3, mini_batch_size=1, log_with=None)
+
+        dummy_dataset = self._init_dummy_dataset()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=self.gpt2_model_ref,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+        dummy_dataloader = ppo_trainer.dataloader
+
+        self.assertEqual(len(dummy_dataloader), 0)
 
     def test_ppo_step(self):
         # initialize dataset
@@ -243,6 +291,7 @@ class PPOTrainerTester(unittest.TestCase):
     def test_ppo_step_with_no_ref(self):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
 
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
@@ -291,7 +340,7 @@ class PPOTrainerTester(unittest.TestCase):
         """
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
-
+        self.gpt2_model = AutoModelForCausalLMWithValueHead.from_pretrained(self.model_id)
         num_shared_layers = 1
 
         ppo_trainer = PPOTrainer(
@@ -470,6 +519,8 @@ class PPOTrainerTester(unittest.TestCase):
         # initialize dataset
         dummy_dataset = self._init_dummy_dataset()
 
+        self.gpt2_model.eval()
+
         ppo_trainer = PPOTrainer(
             config=self.ppo_config,
             model=self.gpt2_model,
@@ -478,31 +529,154 @@ class PPOTrainerTester(unittest.TestCase):
             dataset=dummy_dataset,
         )
 
-        dummy_model_input = torch.tensor([[1, 2, 3, 4, 5, 6, 7]])
-        dummy_query = torch.tensor([[1, 2, 3, 4]])
-        dummy_response = torch.tensor([[5, 6, 7]])
-        rewards = torch.tensor([[0, 1, 0]])
-        gen_len = rewards.shape[-1]
+        dummy_queries = [torch.tensor([1, 2, 3, 4]), torch.tensor([1, 2, 3, 4, 5, 6, 7])]
+        dummy_responses = [torch.tensor([5, 6, 7, 8, 9]), torch.tensor([8, 9, 10, 11, 12, 13])]
+        dummy_scores = torch.Tensor([1, 2])
 
-        old_logits, _, values = ppo_trainer.ref_model(dummy_model_input)
-        old_logprobs = logprobs_from_logits(old_logits[:, :-1, :], dummy_model_input[:, 1:])
-        values = values[:, -gen_len - 1 : -1]
-        old_logprobs = old_logprobs[:, -gen_len:]
-
-        # logprobs, logits, vpred = ppo_trainer.model(dummy_tokens)
-        logprobs, vpred, logits = ppo_trainer.compute_logits_vpred(
-            dummy_model_input, dummy_query, dummy_response, rewards
+        ppo_trainer.config.mini_batch_size = 1
+        ppo_trainer.config.batch_size = 1
+        model_inputs = ppo_trainer.prepare_model_inputs(dummy_queries, dummy_responses)
+        all_logprobs, _, values, mask = ppo_trainer.batched_forward_pass(
+            self.gpt2_model, dummy_queries, dummy_responses, model_inputs
         )
+
+        # dummy values
+        ref_logprobs = all_logprobs + 1
+        logits = torch.exp(all_logprobs)
+        vpreds = values + 0.1
+
+        score, non_score = ppo_trainer.compute_rewards(dummy_scores, all_logprobs, ref_logprobs, mask)
 
         # just make sure a dummy loss is computed
-        pg_loss, vf_loss, _ = ppo_trainer.loss(
-            old_logprobs=old_logprobs,
-            logprob=logprobs,
-            logits=logits,
-            values=values,
-            rewards=rewards,
-            vpred=vpred,
+        idx = 0
+        pg_loss, v_loss, _ = ppo_trainer.loss(
+            all_logprobs[idx].unsqueeze(0),
+            values[idx].unsqueeze(0),
+            score[idx].unsqueeze(0),
+            logits[idx].unsqueeze(0),
+            vpreds[idx].unsqueeze(0),
+            ref_logprobs[idx].unsqueeze(0),
+            mask[idx].unsqueeze(0),
         )
+
+        self.assertAlmostEqual(pg_loss.item(), 0.62516, 4)
+        self.assertAlmostEqual(v_loss.item(), 0.09950, 4)
+
+        # check if we get same results with masked parts removed
+        pg_loss_unmasked, v_loss_unmasked, _ = ppo_trainer.loss(
+            apply_mask(all_logprobs[idx], mask[idx]).unsqueeze(0),
+            apply_mask(values[idx], mask[idx]).unsqueeze(0),
+            apply_mask(score[idx], mask[idx]).unsqueeze(0),
+            apply_mask(logits[idx], mask[idx]).unsqueeze(0),
+            apply_mask(vpreds[idx], mask[idx]).unsqueeze(0),
+            apply_mask(ref_logprobs[idx], mask[idx]).unsqueeze(0),
+            apply_mask(mask[idx], mask[idx]).unsqueeze(0),
+        )
+        self.assertAlmostEqual(pg_loss_unmasked.item(), 0.62516, 4)
+        self.assertAlmostEqual(v_loss_unmasked.item(), 0.09950, 4)
+
+    @parameterized.expand(
+        [
+            ["gpt2"],
+            ["bloom"],
+            ["t5"],
+        ]
+    )
+    def test_batched_forward_pass(self, name):
+        """
+        Test if the loss trainer works fine
+        """
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        dummy_queries = [torch.tensor([1, 2, 3, 4]), torch.tensor([1, 2, 3, 4, 5, 6, 7])]
+        dummy_responses = [torch.tensor([5, 6, 7, 8, 9]), torch.tensor([8, 9, 10, 11, 12, 13])]
+
+        if name == "gpt2":
+            model = self.gpt2_model
+            tokenizer = self.gpt2_tokenizer
+        elif name == "bloom":
+            model = self.bloom_model
+            tokenizer = self.bloom_tokenizer
+        elif name == "t5":
+            model = self.t5_model
+            tokenizer = self.t5_tokenizer
+
+        model.eval()
+
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=model,
+            ref_model=None,
+            tokenizer=tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        # we test all combinations of fwd_bs and bs:
+        # if fwd_bs=bs=1: no padding is applied and only one forward pass
+        # if fwd_bs=1/bs=2: padding is applied and results computed in two fwd passes
+        # if fwd_bs=bs=2: padding is applied and results computed in one fwd pass
+
+        ppo_trainer.config.mini_batch_size = 1
+        ppo_trainer.config.batch_size = 1
+
+        model_inputs = ppo_trainer.prepare_model_inputs([dummy_queries[0]], [dummy_responses[0]])
+        logprobs_0, logits_0, values_0, mask_0 = ppo_trainer.batched_forward_pass(
+            model, [dummy_queries[0]], [dummy_responses[0]], model_inputs
+        )
+
+        ppo_trainer.config.batch_size = 2
+        model_inputs = ppo_trainer.prepare_model_inputs(dummy_queries, dummy_responses)
+        logprobs_1, logits_1, values_1, mask_1 = ppo_trainer.batched_forward_pass(
+            model, dummy_queries, dummy_responses, model_inputs
+        )
+
+        ppo_trainer.config.mini_batch_size = 2
+        model_inputs = ppo_trainer.prepare_model_inputs(dummy_queries, dummy_responses)
+        logprobs_2, logits_2, values_2, mask_2 = ppo_trainer.batched_forward_pass(
+            model, dummy_queries, dummy_responses, model_inputs
+        )
+
+        self.assertLessEqual(abs_diff_masked_tensors(logprobs_1, logprobs_2, mask_1, mask_2), 1e-4)
+        self.assertLessEqual(abs_diff_masked_tensors(values_1, values_2, mask_1, mask_2), 1e-4)
+
+        self.assertLessEqual(abs_diff_masked_tensors(logprobs_0, logprobs_2[:1], mask_0, mask_2[:1]), 1e-4)
+        self.assertLessEqual(abs_diff_masked_tensors(values_0, values_2[:1], mask_0, mask_2[:1]), 1e-4)
+
+    def test_ppo_trainer_max_grad_norm(self):
+        """
+        Test if the `max_grad_norm` feature works as expected
+        """
+        # initialize dataset
+        dummy_dataset = self._init_dummy_dataset()
+
+        self.ppo_config.max_grad_norm = 0.00001
+        ppo_trainer = PPOTrainer(
+            config=self.ppo_config,
+            model=self.gpt2_model,
+            ref_model=None,
+            tokenizer=self.gpt2_tokenizer,
+            dataset=dummy_dataset,
+        )
+
+        dummy_dataloader = ppo_trainer.dataloader
+
+        # train model with ppo
+        for query_tensor, response_tensor in dummy_dataloader:
+            # define a reward for response
+            # (this could be any reward such as human feedback or output from another model)
+            reward = [torch.tensor(1.0), torch.tensor(0.0)]
+            # train model
+            _ = ppo_trainer.step([q for q in query_tensor], [r for r in response_tensor], reward)
+            break
+
+        # check gradients
+        for name, param in ppo_trainer.model.named_parameters():
+            self.assertTrue(param.grad is not None, f"Parameter {name} has no gradient")
+            self.assertTrue(
+                torch.all(param.grad.abs() <= self.ppo_config.max_grad_norm),
+                f"Parameter {name} has a gradient larger than max_grad_norm",
+            )
 
     @unittest.skip("Fix by either patching `whomai()` to work in the staging endpoint or use a dummy prod user.")
     def test_push_to_hub(self):
