@@ -42,7 +42,7 @@ config = PPOConfig(
     model_name="gpt2",
     learning_rate=1.41e-5,
     batch_size=ppo_batch_size,
-    ppo_epochs=4,
+    ppo_epochs=1,   # ppo epoch is done a single batch size
     # log_with="wandb",
 )
 

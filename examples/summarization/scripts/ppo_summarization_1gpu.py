@@ -12,7 +12,7 @@ tqdm.pandas()
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead, create_reference_model
 from trl.core import LengthSampler
 
 from summarization_dataset import build_dataset
@@ -32,12 +32,12 @@ from summarization_dataset import build_dataset
 # We first define the configuration of the experiment, defining the model, the dataset,
 # the training parameters, and the PPO parameters.
 
-rw_batch_size = 8
-ppo_batch_size = 8
+rw_batch_size = 4
+ppo_batch_size = 96     # ppo_epochs MUST BE 1 to use these batch size values
 
-eval_batch_size = 2
+eval_batch_size = 1
 
-frozen_layers = 0.80
+frozen_layers = 0.90
 
 max_train_examples = None
 max_eval_examples = 4
@@ -58,7 +58,7 @@ config = PPOConfig(
     model_name="gpt2",
     learning_rate=1.41e-5,
     batch_size=ppo_batch_size,
-    ppo_epochs=4,
+    ppo_epochs=1,   # ppo epoch is done a single batch size
     log_with=log_with,
 )
 
@@ -111,6 +111,7 @@ logging.warning(f"--> model layers {frozen_layers} frozen <--")
 if frozen_layers > 0:
     freeze_layers(model, frozen_layers=frozen_layers)
 
+# ref_model = create_reference_model(model, num_shared_layers=10)
 ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(config.model_name)
 ref_model.eval()
 if cuda_available:
@@ -232,7 +233,7 @@ for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     # --- Run a PPO step ---
     stats = ppo_trainer.step(query_tensors, response_tensors, reward_tensors)
 
-    if step % save_step_interval == 0:
+    if step % save_step_interval == 0 and step > 0:
         save_ppo(f"./{output_model_name}_checkpoints/{output_model_name}_{step}")
 
     # --- Evaluation set ---
