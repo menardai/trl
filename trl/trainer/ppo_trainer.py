@@ -495,8 +495,10 @@ class PPOTrainer(BaseTrainer):
         if self.config.log_with != "wandb":
             stats = convert_to_scalar(stats)
 
-        if self.lr_scheduler is not None:
-            self.lr_scheduler.step()
+        if (self.current_step + 1) % self.config.gradient_accumulation_steps == 0:
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
+            self.optimizer.zero_grad()
 
         return stats
 
@@ -634,11 +636,13 @@ class PPOTrainer(BaseTrainer):
 
         loss_p, loss_v, train_stats = self.loss(old_logprobs, values, rewards, logits, vpred, logprobs)
         loss = loss_p + loss_v
-        self.optimizer.zero_grad()
+        loss = loss / self.config.gradient_accumulation_steps
         self.accelerator.backward(loss)
-        t = time.time()
-        self.optimizer.step()
-        train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.accelerator.device)
+
+        if (self.current_step + 1) % self.config.gradient_accumulation_steps == 0:
+            t = time.time()
+            self.optimizer.step()
+            train_stats["time/ppo/optimizer_step"] = torch.Tensor([time.time() - t]).to(self.accelerator.device)
         return train_stats
 
     def compute_rewards(self, scores: torch.FloatTensor, logprobs: torch.FloatTensor, ref_logprobs: torch.FloatTensor):
@@ -876,9 +880,8 @@ class PPOTrainer(BaseTrainer):
             logs["env/reward_std"] = torch.std(rewards).cpu().numpy().item()
             logs["env/reward_dist"] = rewards.cpu().numpy()
 
-            if self.config.log_with == "tensorboard":
-                # update the current step
-                self.current_step += 1
+            # update the current step
+            self.current_step += 1
 
             self.accelerator.log(logs, step=self.current_step if self.config.log_with == "tensorboard" else None)
 

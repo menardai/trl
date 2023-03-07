@@ -73,7 +73,8 @@ class PPOTrainer2GPU(PPOTrainer):
             self.ref_model = ref_model
         else:
             raise ValueError(
-                f"ref_model must be a PreTrainedModelWrapper, got {type(ref_model)} - supported architectures are: {SUPPORTED_ARCHITECTURES}"
+                f"ref_model must be a PreTrainedModelWrapper or `None`, got {type(ref_model)} - supported "
+                f"architectures are: {SUPPORTED_ARCHITECTURES} "
             )
 
         if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):

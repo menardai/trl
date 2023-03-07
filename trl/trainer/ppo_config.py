@@ -49,6 +49,8 @@ class PPOConfig(object):
             Range for clipping values in loss calculation
         vf_coef (`float`, *optional*, defaults to 0.1):
             Scaling factor for value loss
+        gradient_accumulation_steps (`int`, *optional*, defaults to 1):
+            Number of gradient accumulation steps. Total batch size = batch_size * gradient_accumulation_steps
         batch_size (`int`, *optional*, defaults to 256):
             Number of samples per optimisation step
         forward_batch_size (`int`, *optional*, defaults to 1):
@@ -84,6 +86,7 @@ class PPOConfig(object):
         cliprange: Optional[float] = 0.2,
         cliprange_value: Optional[float] = 0.2,
         vf_coef: Optional[float] = 0.1,
+        gradient_accumulation_steps: Optional[int] = 1,
         batch_size: Optional[int] = 256,
         forward_batch_size: Optional[int] = 1,
         ppo_epochs: Optional[int] = 4,
@@ -106,6 +109,7 @@ class PPOConfig(object):
         self.cliprange = cliprange
         self.cliprange_value = cliprange_value
         self.vf_coef = vf_coef
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.batch_size = batch_size
         self.forward_batch_size = forward_batch_size
         self.ppo_epochs = ppo_epochs

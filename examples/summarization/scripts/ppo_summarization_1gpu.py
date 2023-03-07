@@ -33,7 +33,9 @@ from summarization_dataset import build_dataset
 # the training parameters, and the PPO parameters.
 
 rw_batch_size = 4
-ppo_batch_size = 96     # ppo_epochs MUST BE 1 to use these batch size values
+
+ppo_batch_size = 1  # ppo_epochs MUST BE 1 to use these batch size values
+gradient_accumulation_steps = 96  # Total batch size = batch_size * gradient_accumulation_steps
 
 eval_batch_size = 1
 
@@ -53,11 +55,12 @@ rw_device = "cuda" if cuda_available else "cpu"
 # Check the default arguments in the `PPOConfig` class for more details.
 # If you want to log with tensorboard, add the kwarg
 # `accelerator_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
-output_model_name = "ppo_gpt2_small"
+output_model_name = "ppo_gpt2_small_acc"
 config = PPOConfig(
     model_name="gpt2",
     learning_rate=1.41e-5,
     batch_size=ppo_batch_size,
+    gradient_accumulation_steps=gradient_accumulation_steps,
     ppo_epochs=1,   # ppo epoch is done a single batch size
     log_with=log_with,
 )
